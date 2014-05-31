@@ -114,6 +114,8 @@ def serve_resource(payload):
     except ValueError:
         logger.error('Invalid signature')
         raise Unauthorized('Invalid signature')
+    except:
+        raise BadRequest('Invalid request payload')
 
     # Now perform request for the URL in the configuration
     # ------------------------------------------------------------
@@ -134,7 +136,7 @@ def serve_resource(payload):
 
     # If the request failed in some way, return 404
     # ------------------------------------------------------------
-    if not src_resp.ok:
+    if src_resp.status_code != 200:
         logger.error('Source returned an error code: {0}'
                      .format(src_resp.status_code))
         return response_404(reason='Source returned an error code: {0}'

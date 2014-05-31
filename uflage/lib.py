@@ -6,7 +6,6 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 
 
 def calculate_signature(key, msg):

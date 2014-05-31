@@ -59,11 +59,14 @@ class UflageTestWrapper(object):
     def view_image_jpeg():
         return IMG_JPEG, 200, {'Content-type': 'image/jpeg'}
 
+    @app.route('/redirect_without_location.jpg')
+    def view_redirect_without_location():
+        return 'test', 302, {'Content-type': 'image/jpeg'}
+
     def start(self):
         app.config['UFLAGE_SECRET_KEY'] = SECRET_KEY
         self._proxy_proc = Process(
-            target=app.run, kwargs={'port': self._proxy_port,
-                                    'debug': True})
+            target=app.run, kwargs={'port': self._proxy_port})
         self._proxy_proc.start()
 
         self._ts_proc = Process(

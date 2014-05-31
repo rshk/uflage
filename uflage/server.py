@@ -3,7 +3,8 @@ import logging
 import os
 
 from flask import Flask, request
-from werkzeug.exceptions import Unauthorized
+from werkzeug.exceptions import Unauthorized, BadRequest
+import requests
 
 from .lib import verify_payload
 
@@ -14,7 +15,13 @@ logger = logging.getLogger(__name__)
 
 
 VERSION = '0.1'
-SECRET_KEY = os.environ.get('UFLAGE_SECRET_KEY') or 'SuperSecret!'
+
+
+def get_secret_key():
+    return (os.environ.get('UFLAGE_SECRET_KEY')
+            or app.config['UFLAGE_SECRET_KEY']
+            or 'SuperSecretKey!')
+
 MIME_TYPES = [
     'image/bmp',
     'image/cgm',
@@ -72,28 +79,38 @@ DEFAULT_SECURITY_HEADERS = {
 }
 
 
-def response_404():
+def response_404(reason=None):
     """Simple wrapper to return a 404 response"""
     headers = {
         'Expires': '0',
         'Cache-Control': 'no-cache, no-store, private, must-revalidate',
     }
+    if reason is not None:
+        headers['X-Failure-reason'] = reason
     headers.update(DEFAULT_SECURITY_HEADERS)
     return 'Not Found', 404, headers
 
 
 @app.route('/<payload>')
 def serve_resource(payload):
+    if isinstance(payload, unicode):
+        # We need a byte string to b64 decode
+        payload = payload.encode('utf-8')
+
     # Check against loops
     # ------------------------------------------------------------
-    if request.headers['via'] == USER_AGENT:
+    if request.headers.get('via') == USER_AGENT:
         logger.error('Requesting from self!')
-        return response_404()
-
-    recv_signature = request.args['s']
+        return response_404(reason='Loop detected')
 
     try:
-        request_conf = verify_payload(SECRET_KEY, payload, recv_signature)
+        recv_signature = request.args['s']
+    except KeyError:
+        raise BadRequest('Signature is required')
+
+    try:
+        request_conf = verify_payload(
+            get_secret_key(), payload, recv_signature)
     except ValueError:
         logger.error('Invalid signature')
         raise Unauthorized('Invalid signature')
@@ -113,25 +130,27 @@ def serve_resource(payload):
 
     # Perform the actual request!
     # ------------------------------------------------------------
-    src_resp = request.get(rq_url, headers=rq_headers)
+    src_resp = requests.get(rq_url, headers=rq_headers)
 
     # If the request failed in some way, return 404
     # ------------------------------------------------------------
     if not src_resp.ok:
         logger.error('Source returned an error code: {0}'
                      .format(src_resp.status_code))
-        return response_404()
+        return response_404(reason='Source returned an error code: {0}'
+                            .format(src_resp.status_code))
 
     # Check maximum content length, to prevent abuse
+    # todo: what if content-length is missing?
     # ------------------------------------------------------------
-    content_length = src_resp.headers['Content-length']
+    content_length = int(src_resp.headers['Content-length'])
     if content_length > MAX_CONTENT_LENGTH:
         logger.error('Maximum content length exceeded')
-        return response_404()
+        return response_404(reason='Maximum content length exceeded')
 
     # Check content type
     # ------------------------------------------------------------
-    content_type = src_resp.headers.get('Content-type')
+    content_type = src_resp.headers.get('Content-type', '')
     content_type, content_type_extra = cgi.parse_header(content_type)
     if content_type not in MIME_TYPES:
         logger.error('Disallowed mime type: {0}'.format(content_type))
@@ -141,6 +160,7 @@ def serve_resource(payload):
     # ------------------------------------------------------------
     new_headers = {
         'Content-type': src_resp.headers['Content-type'],
+        'Content-length': src_resp.headers['Content-length'],
         'Cache-control': src_resp.headers.get('Cache-control')
         or 'public, max-age=31536000',
         'X-Uflage-Host': UFLAGE_HOSTNAME,
@@ -154,7 +174,4 @@ def serve_resource(payload):
         if hdr in src_resp.headers:
             new_headers[hdr] = src_resp.headers[hdr]
 
-    if content_length:
-        new_headers['Content-length'] = content_length
-
-    return src_resp.data, 200, new_headers
+    return src_resp.content, 200, new_headers
